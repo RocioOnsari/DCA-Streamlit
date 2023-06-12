@@ -8,7 +8,7 @@ import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, fsolve
 
 
 # Function definition
@@ -43,6 +43,12 @@ def coeff_exp(x, y) -> Coefficents:
 
 
 def coeff_hyp(x, y) -> Coefficents:
+    popt, pcov = curve_fit(f=func_hyp, xdata=x.values, ydata=y.values)
+    print(popt)
+    popt[0] = popt[0]
+    return Coefficents(dn=popt[1], qi=popt[2], b=popt[0])
+
+def coeff_hyp_ln(x, y) -> Coefficents:
     popt, pcov = curve_fit(f=func_hyp, xdata=x.values, ydata=y.values)
     print(popt)
     popt[0] = popt[0]
@@ -93,14 +99,13 @@ def reserves_calculation_exp(q, qi, dn):
     return ((q - qi) / dn) / 1000
 
 
-def reserves_calculation_hyp(q, qi, coeff: Coefficents, dn_norm):
-    # st.write(f"{coeff.dn} * (({q} / {qi}) ** {coeff.b}) = {dn_norm}")
+def reserves_calculation_hyp(q, qi, coeff: Coefficents, dn_norm, offset: float = 0):
     nume =(q * (qi ** coeff.b) - (q ** coeff.b) * qi)
     # st.write(f"({q} * ({qi} ** {coeff.b}) - ({q} ** {coeff.b}) * {qi}) = {nume}")
     deno = ((qi - coeff.b) * dn_norm * (qi ** coeff.b))
-    final = (nume / deno) / 1000
     # st.write(f"(({qi} - {coeff.b}) * {dn_norm} * ({qi} ** {coeff.b})) = {deno}")
-    return final
+    final = (nume / deno) / 1000
+    return final + offset
 
 def reserves_calculation_arm(q, qi, dn_norm):
     # st.write(f"({q} * np.log({q} / {qi})) / {dn_norm} / 1000 = {dn_norm}")
@@ -244,12 +249,7 @@ def forecast(label: str, t_start: int, q_start: float, coeff: Coefficents,
 qexp_forecast = forecast("Qexp", t_start=final_history_date, q_start=final_history_rate, coeff=exp_coeff, dca_func=dca_exp)
 q2p_forecast = forecast("Q2p", t_start=final_history_date, q_start=final_history_rate, coeff=hyper_coeff, dca_func=dca_hyp)
 qharm_forecast = forecast("Qharm", t_start=final_history_date, q_start=final_history_rate, coeff=harmonic_coeff, dca_func=dca_harm)
-# Combine the forecasts with the data
-decline_forecasts_df = combine_forecasts(pozo, [qexp_forecast, q2p_forecast, qharm_forecast])
-# Plot and show table
-with st.expander("Complete Table", False):
-    st.table(decline_forecasts_df)
-st.plotly_chart(graph_semilog_multi(decline_forecasts_df, date_column, [q_column, "Qexp", "Q2p", "Qharm"]))
+
 
 # We calculate reserves
 P10=reserves_calculation_exp(final_history_rate, ec_limit, exp_coeff.dn)
@@ -259,8 +259,26 @@ P50=reserves_calculation_hyp(final_history_rate, ec_limit, hyper_coeff, dn_norm)
 hcoeff = dataclasses.replace(hyper_coeff)
 hcoeff.b = 1
 P90=reserves_calculation_arm(final_history_rate, ec_limit, dn_norm)
+P10_LN = (P50 ** 2) / P10
 
-dreservas={'P10': P10, 'P50':P50, 'P90': P90}
+b = fsolve(func=lambda b: reserves_calculation_hyp(final_history_rate, 1, Coefficents(qi=0, dn=0, b=b), dn_norm, -P10_LN),
+           x0 = 0.3)[0]
+hyper_3p_coeff = hyper_coeff
+hyper_3p_coeff.b = b
+st.write(hyper_3p_coeff)
+qharm_3p_forecast = forecast("Qharm 3P", t_start=final_history_date, q_start=final_history_rate, coeff=hyper_3p_coeff, dca_func=dca_hyp)
+
+st.write(f"r:{b}")
+
+# Combine the forecasts with the data
+decline_forecasts_df = combine_forecasts(pozo, [qexp_forecast, q2p_forecast, qharm_forecast, qharm_3p_forecast])
+# Plot and show table
+with st.expander("Complete Table", False):
+    st.table(decline_forecasts_df)
+st.plotly_chart(graph_semilog_multi(decline_forecasts_df, date_column, [q_column, "Qexp", "Q2p", "Qharm", "Qharm 3P"]))
+
+
+dreservas={'P10': P10, 'P10_LN': P10_LN, 'P50':P50, 'P90': P90}
 st.subheader("Reservas")
 dfr = pd.DataFrame(index=["Reservas"],data=dreservas)
 st.table(dfr)
@@ -282,11 +300,11 @@ st.table(points_coeffs_df)
 # Calcular los forecasts de los diferentes subsets de puntos
 all_forecast = forecast("All", t_start=final_history_date, q_start=final_history_rate, coeff=all_points_coeff, dca_func=dca_exp)
 middle_forecast = forecast("3:5", t_start=final_history_date, q_start=final_history_rate, coeff=middle_points_coeff, dca_func=dca_exp)
-end_forecast = forecast("8:11", t_start=final_history_date, q_start=final_history_rate, coeff=end_points_coeff, dca_func=dca_exp)
+end_forecast = forecast("4:11", t_start=final_history_date, q_start=final_history_rate, coeff=end_points_coeff, dca_func=dca_exp)
 custom_forecast = forecast(f"{start}:{end}", t_start=final_history_date, q_start=final_history_rate, coeff=custom_coeff, dca_func=dca_exp)
 
 point_forecasts_df = combine_forecasts(pozo, [all_forecast, middle_forecast, end_forecast, custom_forecast])
 with st.expander("Point Forecasts Table", False):
     st.table(point_forecasts_df)
 
-st.plotly_chart(graph_semilog_multi(point_forecasts_df, date_column, [q_column, "All", "3:5", "8:11",f"{start}:{end}"]))
+st.plotly_chart(graph_semilog_multi(point_forecasts_df, date_column, [q_column, "All", "3:5", "4:11",f"{start}:{end}"]))
