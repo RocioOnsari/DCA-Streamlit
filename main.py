@@ -265,10 +265,7 @@ b = fsolve(func=lambda b: reserves_calculation_hyp(final_history_rate, 1, Coeffi
            x0 = 0.3)[0]
 hyper_3p_coeff = hyper_coeff
 hyper_3p_coeff.b = b
-st.write(hyper_3p_coeff)
 qharm_3p_forecast = forecast("Qharm 3P", t_start=final_history_date, q_start=final_history_rate, coeff=hyper_3p_coeff, dca_func=dca_hyp)
-
-st.write(f"r:{b}")
 
 # Combine the forecasts with the data
 decline_forecasts_df = combine_forecasts(pozo, [qexp_forecast, q2p_forecast, qharm_forecast, qharm_3p_forecast])
