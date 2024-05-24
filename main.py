@@ -259,7 +259,7 @@ P50=reserves_calculation_hyp(final_history_rate, ec_limit, hyper_coeff, dn_norm)
 hcoeff = dataclasses.replace(hyper_coeff)
 hcoeff.b = 1
 P10=reserves_calculation_arm(final_history_rate, ec_limit, dn_norm)
-P10_LN = (P50 ** 2) / P10
+P10_LN = (P50 ** 2) / P90
 
 b = fsolve(func=lambda b: reserves_calculation_hyp(final_history_rate, 1, Coefficents(qi=0, dn=0, b=b), dn_norm, -P10_LN),
            x0 = 0.3)[0]
