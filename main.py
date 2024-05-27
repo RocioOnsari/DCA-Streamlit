@@ -162,7 +162,10 @@ elif option == "Upload csv":
                                ["%y/%m/%d", "%d/%m/%y", '%m/%d/%y', "%y-%m-%d", "%d-%m-%y", '%m-%d-%y'])
 
         df.dropna(inplace=True)
-        df[date_column] = pd.to_datetime(df[date_column], format=format_date, origin="unix")
+        time_selected = st.checkbox("Select date or moth:", "Month", "Date")
+        if time_selected = "Date":
+            df[date_column] = pd.to_datetime(df[date_column], format=format_date, origin="unix")
+        else: df[date_column] = df[date_column]
         st.write('You selected as q column:', q_column)
 
 elif option == "Upload excel":
