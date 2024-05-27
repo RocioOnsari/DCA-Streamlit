@@ -175,7 +175,7 @@ elif option == "Upload excel":
         sheet_name = st.selectbox('Select the sheet name', options=excel_file.sheet_names)
         skip_rows: int = st.number_input("Write the row number where the data begins", value=0)
         read_rows: int = st.number_input("Write the row number where the data ends", value=100)
-        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skip_rows, nrows=read_rows)
+        df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=skip_rows, nrows=read_rows, decimal=",")
 
         date_column = st.selectbox('Select date column', df.columns)
         q_column = st.selectbox('Select w column', df.columns)
