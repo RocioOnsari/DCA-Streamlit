@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from typing import Callable, List
 from datetime import datetime, date, timedelta, time
 import numpy as np
+import scipy.optimize
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from scipy.optimize import curve_fit, fsolve
+from scipy.optimize import curve_fit, fsolve, Bounds
 
 st.set_page_config(layout="wide")
 
@@ -45,14 +46,17 @@ def coeff_exp(x, y) -> Coefficents:
 
 
 def coeff_hyp(x, y) -> Coefficents:
-    popt, pcov = curve_fit(func_hyp, xdata=x.values, ydata=y.values)
+    # 0 < b < 1
+    delta = 0.01
+    bounds = ([0 + delta, -np.inf, -np.inf], [1 - delta, np.inf, np.inf])
+    popt, pcov = curve_fit(func_hyp, xdata=x.values, ydata=y.values, bounds=bounds)
     print(popt)
     popt[0] = popt[0]
     return Coefficents(dn=popt[1], qi=popt[2], b=popt[0])
 
 
 def coeff_hyp_ln(x, y) -> Coefficents:
-    popt, pcov = curve_fit(f=func_hyp, xdata=x.values, ydata=y.values)
+    popt, pcov = curve_fit(f=func_hyp, xdata=x.values, ydata=y.values, bounds=[])
     print(popt)
     popt[0] = popt[0]
     return Coefficents(dn=popt[1], qi=popt[2], b=popt[0])
@@ -72,8 +76,8 @@ def graph_semilog_q_date(x_df, y_df):
 
 
 # We draw a semilog date vs rate graph
-def graph_semilog_multi(df, x, ys):
-    fig = px.line(df, x=x, y=ys, log_y=True)
+def graph_semilog_multi(_df, x, ys):
+    fig = px.line(_df, x=x, y=ys, log_y=True)
     fig.update_traces(mode="markers+lines", hovertemplate=None)
     fig.update_layout(hovermode="x unified")
     return fig
@@ -96,8 +100,8 @@ def dca_harm(t: int, coeff: Coefficents) -> float:
     return coeff.qi / (1 + coeff.dn * t)
 
 
-def denormalize_coef(coefficient: Coefficents, max_t: float, max_q: float) -> Coefficents:
-    return Coefficents(dn=coefficient.dn / max_t, qi=coefficient.qi * max_q, b=coefficient.b)
+def denormalize_coef(coefficient: Coefficents, _max_t: float, _max_q: float) -> Coefficents:
+    return Coefficents(dn=coefficient.dn / _max_t, qi=coefficient.qi * _max_q, b=coefficient.b)
 
 
 def reserves_calculation_exp(q, qi, dn):
@@ -134,6 +138,31 @@ def combine_forecasts(base_df, extra_columns: list):
     combined[date_column] = pozo[date_column].min() + timedelta(
         days=1) * combined.index
     return combined
+
+
+def forecast(label: str, t_start: int, q_start: float, coeff: Coefficents,
+             dca_func: Callable[[int, Coefficents], float],
+             q_limit: float = 0.01, n_limit: int = 100, interval_days: int = 30):
+    q = q_start
+    qi = None
+    n = 0
+    q_list = []
+    t_list = []
+    print(f"Starting forecast with{q}")
+
+    while q >= q_limit and n < n_limit:
+        t = t_start + n * interval_days
+        q = dca_func(t, coeff)
+        if qi is None:
+            qi = q
+        q = (q_start / qi) * q
+        q_list.append(q)
+        t_list.append(t)
+        n = n + 1
+
+    if len(q_list) == 0:
+        raise RuntimeError("Bad list lenght")
+    return pd.DataFrame(index=t_list, data={label: q_list})
 
 
 # Graphical user interface
@@ -212,6 +241,7 @@ print(pozo.info())
 pozo["Delta"] = (pozo[date_column].diff() / timedelta(days=1)).cumsum()
 pozo['Delta'].iat[0] = 0
 interval_days_param = int(pozo['Delta'].iat[1])
+
 max_t = pozo['Delta'].max()
 max_q = pozo[q_column].max()
 q0 = pozo[q_column][0]
@@ -235,15 +265,17 @@ with st.expander("Mod Input Table", False):
 st.header("Qo [m3/d] vs Date graph")
 hist_graph = graph_semilog_q_date(pozo[date_column], pozo[q_column])
 
-exp_coeff = denormalize_coef(coeff_exp(delta_t_norm, qhist_norm), max_t=max_t, max_q=max_q)
-hyper_coeff = denormalize_coef(coeff_hyp(delta_t_norm, qhist_norm), max_t=max_t, max_q=max_q)
-harmonic_coeff = denormalize_coef(coeff_harm(delta_t_norm, qhist_norm), max_t=max_t, max_q=max_q)
+ini, fin = st.select_slider(label="Elegir rango para reducir", value=(0, len(delta_t_norm) - 1),
+                            options=list(range(len(delta_t_norm))))
+
+exp_coeff = denormalize_coef(coeff_exp(delta_t_norm[ini:fin], qhist_norm[ini:fin]), _max_t=max_t, _max_q=max_q)
+hyper_coeff = denormalize_coef(coeff_hyp(delta_t_norm[ini:fin], qhist_norm[ini:fin]), _max_t=max_t, _max_q=max_q)
+harmonic_coeff = denormalize_coef(coeff_harm(delta_t_norm[ini:fin], qhist_norm[ini:fin]), _max_t=max_t, _max_q=max_q)
 
 st.table(coeff_table(["1P", "2P", "3P"], [exp_coeff, hyper_coeff, harmonic_coeff]))
 
 # Here, we select the economic limit of the well
 ec_limit = st.number_input("Select the minimum Q [m3/d] accepted:", value=1)
-n: int = 0
 
 # Last time value
 final_history_date = pozo["Delta"].values[-1]
@@ -253,33 +285,6 @@ final_history_rate = pozo[q_column].values[-1]
 
 # Graphical user interface
 st.text(f' Final historic rate: {final_history_rate}')
-
-
-def forecast(label: str, t_start: int, q_start: float, coeff: Coefficents,
-             dca_func: Callable[[int, Coefficents], float],
-             q_limit: float = 0.01, n_limit: int = 100, interval_days: int = 30):
-    q = q_start
-    qi = None
-    n = 0
-    q_list = []
-    t_list = []
-    print(f"Starting forecast with{q}")
-
-    while q >= q_limit and n < n_limit:
-        t = t_start + n * interval_days
-        q = dca_func(t, coeff)
-        print(f"QVALUE{q}")
-        if qi is None:
-            qi = q
-        q = (q_start / qi) * q
-        q_list.append(q)
-        t_list.append(t)
-        n = n + 1
-
-    if len(q_list) == 0:
-        raise RuntimeError("Bad list lenght")
-    return pd.DataFrame(index=t_list, data={label: q_list})
-
 
 # Run the 3 forecasts, for each declination type
 qexp_forecast = forecast("Qexp", t_start=final_history_date, q_start=final_history_rate, coeff=exp_coeff,
@@ -324,8 +329,6 @@ st.subheader("Ahora calculamos los coeficientes con distintos puntos")
 start, end = st.select_slider(label="Elegir rango", value=(0, len(delta_t_norm) - 1),
                               options=list(range(len(delta_t_norm))))
 
-calc_exp = st.checkbox("Add")
-
 
 @dataclass
 class Method:
@@ -349,22 +352,29 @@ methods = [exp_method, hyp_method, harm_method]
 
 selected_methods = st.multiselect("Select methods to use", options=methods, format_func=lambda x: x.name)
 
-def calculate_method_result(name: str, method: Method, ts: List[int], ys: list[float],
-                            _max_t: float, _max_q: float) -> MethodResult:
+
+def calculate_method_result(experiment_name: str, method: Method, ts: List[int], ys: list[float],
+                            _max_t: float, _max_q: float, _t_start: int, _q_start: float) -> MethodResult:
     norm_coef = method.coefficient_func(ts, ys)
-    denorm_coef = denormalize_coef(norm_coef, max_t=max_t, max_q=max_q)
-    name = f"{name} - {method.name}"
-    forecast_df = forecast(name, t_start=final_history_date, q_start=final_history_rate, coeff=denorm_coef,
+    name = f"{experiment_name} {method.name}"
+    denorm_coef = denormalize_coef(norm_coef, _max_t=_max_t, _max_q=_max_q)
+    forecast_df = forecast(name, t_start=_t_start, q_start=_q_start, coeff=denorm_coef,
                            dca_func=method.dca_func)
-    return MethodResult(name=name, normalized_coefficient=norm_coef, denormalized_coefficient=denorm_coef, forecast_df=forecast_df)
+    return MethodResult(name=name, normalized_coefficient=norm_coef,
+                        denormalized_coefficient=denorm_coef,
+                        forecast_df=forecast_df)
 
 
-results: List[MethodResult] = [calculate_method_result("All", method, delta_t_norm, qhist_norm, max_t, max_q)
-    for method in selected_methods] + [calculate_method_result(f"{start}:{end}", method, delta_t_norm[start:end], qhist_norm[start:end], max_t, max_q)
-    for method in selected_methods]
+results: List[MethodResult] = [calculate_method_result(f"All", method, delta_t_norm, qhist_norm, _max_t=max_t,
+                                                       _max_q=max_q, _t_start=final_history_date, _q_start=final_history_rate)
+                               for method in selected_methods] + [
+                                  calculate_method_result(f"{start}:{end}", method, delta_t_norm[start:end],
+                                                          qhist_norm[start:end], _max_t=max_t, _max_q=max_q, _t_start=delta_t_norm[end]*max_t, _q_start=qhist_norm[end]*max_q)
+                                  for method in selected_methods]
 
 # Armar la tabla de coeficientes
-points_coeffs_df = coeff_table([result.name for result in results], [result.denormalized_coefficient for result in results])
+points_coeffs_df = coeff_table([result.name for result in results],
+                               [result.denormalized_coefficient for result in results])
 # Calcular las reservas
 points_coeffs_df["P10"] = points_coeffs_df["Dni"].apply(
     lambda dn: reserves_calculation_exp(final_history_rate, ec_limit, dn))
@@ -376,4 +386,4 @@ point_forecasts_df = combine_forecasts(pozo, [result.forecast_df for result in r
 with st.expander("Point Forecasts Table", False):
     st.table(point_forecasts_df)
 
-st.plotly_chart(graph_semilog_multi(point_forecasts_df, date_column, [q_column]+[result.name for result in results]))
+st.plotly_chart(graph_semilog_multi(point_forecasts_df, date_column, [q_column] + [result.name for result in results]))
